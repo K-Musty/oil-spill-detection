@@ -1,0 +1,71 @@
+# Python / Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Data - Raw (keep processed)
+data/raw/
+*.zip
+*.tar.gz
+*.rar
+!*.npz
+
+# Model checkpoints (optional - you can keep)
+checkpoints/
+*.pt
+*.pth
+*.onnx
+
+# Logs
+logs/
+*.log
+wandb/
+tensorboard/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Environment variables
+.env
+.env.local
+
+# Google Colab
+sample_data/
+
+# Misc
+*.tmp
+*.temp
+*.bak
