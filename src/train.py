@@ -102,7 +102,7 @@ def train_one_epoch(model, loader, optimizer, scaler, device, class_weights):
         masks = masks.to(device)
 
         optimizer.zero_grad()
-        # Use new autocast syntax
+        # Use new autocast syntax for AMP
         with torch.amp.autocast('cuda' if torch.cuda.is_available() else 'cpu'):
             pred = model(images)
             loss = combined_loss(pred, masks, class_weights)
@@ -175,12 +175,11 @@ def main(args):
 
     # Optimizer and scheduler
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    # Remove verbose=True (deprecated)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=5
     )
 
-    # Updated GradScaler
+    # GradScaler for AMP
     scaler = torch.amp.GradScaler('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Training state
@@ -201,13 +200,14 @@ def main(args):
         # Scheduler step
         scheduler.step(val_iou)
 
-        # Save best model
+        # Save best model with model name prefix
         if val_iou > best_iou:
             best_iou = val_iou
             best_epoch = epoch
             patience_counter = 0
-            torch.save(model.state_dict(), checkpoint_dir / 'best_model.pt')
-            print(f"✅ Best model saved (IoU = {best_iou:.4f})")
+            checkpoint_path = checkpoint_dir / f'{args.model}_best_model.pt'
+            torch.save(model.state_dict(), checkpoint_path)
+            print(f"✅ Best model saved to {checkpoint_path} (IoU = {best_iou:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= args.patience:
@@ -217,23 +217,30 @@ def main(args):
     print(f"\n🏆 Best IoU: {best_iou:.4f} at epoch {best_epoch}")
 
     # Load best model and evaluate on test set
-    model.load_state_dict(torch.load(checkpoint_dir / 'best_model.pt'))
+    checkpoint_path = checkpoint_dir / f'{args.model}_best_model.pt'
+    if not checkpoint_path.exists():
+        print(f"❌ Checkpoint {checkpoint_path} not found. Skipping test.")
+        return
+    model.load_state_dict(torch.load(checkpoint_path))
     test_iou, test_dice = test_model(model, test_loader, device)
     print(f"\n✅ Test IoU: {test_iou:.4f}")
     print(f"✅ Test Dice: {test_dice:.4f}")
 
-    # Save final metrics
-    with open(checkpoint_dir / 'metrics.txt', 'w') as f:
+    # Save metrics with model name prefix
+    metrics_path = checkpoint_dir / f'{args.model}_metrics.txt'
+    with open(metrics_path, 'w') as f:
+        f.write(f"Model: {args.model}\n")
+        f.write(f"Encoder: {args.encoder}\n")
         f.write(f"Best epoch: {best_epoch}\n")
         f.write(f"Best validation IoU: {best_iou:.4f}\n")
         f.write(f"Test IoU: {test_iou:.4f}\n")
         f.write(f"Test Dice: {test_dice:.4f}\n")
-        f.write(f"Model: {args.model}\n")
-        f.write(f"Encoder: {args.encoder}\n")
         f.write(f"Batch size: {args.batch_size}\n")
         f.write(f"Learning rate: {args.lr}\n")
+        f.write(f"Weight decay: {args.weight_decay}\n")
+        f.write(f"Patience: {args.patience}\n")
 
-    print("\n✅ Training complete! Checkpoints saved to:", checkpoint_dir)
+    print(f"\n✅ Training complete! Checkpoints and metrics saved to: {checkpoint_dir}")
 
 
 if __name__ == "__main__":
