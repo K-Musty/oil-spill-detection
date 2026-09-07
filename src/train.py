@@ -40,12 +40,13 @@ class DiceLoss(nn.Module):
 def combined_loss(pred, target, class_weights, bce_weight=0.5, dice_weight=0.5):
     """
     Combined BCE + Dice loss.
-    
     Args:
         pred: Model predictions (B, C, H, W)
         target: Ground truth masks (B, H, W)
         class_weights: Tensor of shape (2,) for background and oil
     """
+    # Cast target to Long (required for CrossEntropyLoss)
+    target = target.long()
     bce = nn.CrossEntropyLoss(weight=class_weights)(pred, target)
     dice = DiceLoss()(pred, target)
     return bce_weight * bce + dice_weight * dice
@@ -101,7 +102,8 @@ def train_one_epoch(model, loader, optimizer, scaler, device, class_weights):
         masks = masks.to(device)
 
         optimizer.zero_grad()
-        with autocast():
+        # Use new autocast syntax
+        with torch.amp.autocast('cuda' if torch.cuda.is_available() else 'cpu'):
             pred = model(images)
             loss = combined_loss(pred, masks, class_weights)
 
@@ -123,7 +125,7 @@ def validate(model, loader, device):
             images = images.to(device)
             masks = masks.to(device)
 
-            with autocast():
+            with torch.amp.autocast('cuda' if torch.cuda.is_available() else 'cpu'):
                 pred = model(images)
             pred_mask = torch.argmax(pred, dim=1)
 
@@ -173,11 +175,13 @@ def main(args):
 
     # Optimizer and scheduler
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # Remove verbose=True (deprecated)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=5
     )
 
-    scaler = GradScaler()
+    # Updated GradScaler
+    scaler = torch.amp.GradScaler('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Training state
     best_iou = 0.0
