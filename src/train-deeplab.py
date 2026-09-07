@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # src/train_deeplab.py
-# Standalone training script for DeepLabV3 with 512×512 input.
+# Standalone DeepLabV3 training with 512×512 input.
+# Does NOT modify any existing code.
 
 import os
 import argparse
@@ -15,16 +16,60 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# ---------- Import Dataset (will be customised for 512) ----------
-# We'll copy the dataset logic here to avoid changing original files.
-from dataset import OilSpillDataset, get_transforms  # reuse transforms
-from torch.utils.data import DataLoader
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from torch.utils.data import DataLoader, Dataset
+import numpy as np
 import os as _os
 
+# ---------- Dataset Class (copied from dataset.py) ----------
+class OilSpillDataset(Dataset):
+    def __init__(self, npz_path, transform=None):
+        data = np.load(npz_path)
+        self.images = data['images'].astype(np.float32)
+        self.masks = data['masks'].astype(np.int64)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        image = self.images[idx].copy()
+        mask = self.masks[idx].copy()
+        if self.transform:
+            augmented = self.transform(image=image, mask=mask)
+            image = augmented['image']
+            mask = augmented['mask']
+        else:
+            image = torch.from_numpy(image).permute(2, 0, 1).float()
+            mask = torch.from_numpy(mask).long()
+        return image, mask
+
+# ---------- Transform Functions (with image_size) ----------
+def get_transforms_512(train=True, image_size=512):
+    """
+    Transform pipeline for 512×512 images.
+    """
+    if train:
+        return A.Compose([
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.RandomRotate90(p=0.5),
+            A.RandomGamma(p=0.3, gamma_limit=(80, 120)),
+            A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
+            A.Resize(height=image_size, width=image_size),
+            A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+            ToTensorV2(),
+        ])
+    else:
+        return A.Compose([
+            A.Resize(height=image_size, width=image_size),
+            A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+            ToTensorV2(),
+        ])
+
+# ---------- DataLoader ----------
 def get_dataloaders_512(data_dir=None, batch_size=4, num_workers=2):
-    """
-    Load train/val/test dataloaders with 512×512 images.
-    """
     if data_dir is None:
         script_dir = Path(__file__).parent
         data_dir = script_dir.parent / "data" / "processed"
@@ -39,19 +84,9 @@ def get_dataloaders_512(data_dir=None, batch_size=4, num_workers=2):
         if not p.exists():
             raise FileNotFoundError(f"Missing file: {p}")
 
-    # Use 512×512 transforms (resize to 512 internally)
-    train_dataset = OilSpillDataset(
-        str(train_path),
-        transform=get_transforms(train=True, image_size=512)
-    )
-    val_dataset = OilSpillDataset(
-        str(val_path),
-        transform=get_transforms(train=False, image_size=512)
-    )
-    test_dataset = OilSpillDataset(
-        str(test_path),
-        transform=get_transforms(train=False, image_size=512)
-    )
+    train_dataset = OilSpillDataset(str(train_path), transform=get_transforms_512(train=True, image_size=512))
+    val_dataset   = OilSpillDataset(str(val_path),   transform=get_transforms_512(train=False, image_size=512))
+    test_dataset  = OilSpillDataset(str(test_path),  transform=get_transforms_512(train=False, image_size=512))
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
                               num_workers=num_workers, pin_memory=True)
@@ -66,7 +101,7 @@ def get_dataloaders_512(data_dir=None, batch_size=4, num_workers=2):
     print(f"   Test:  {len(test_dataset)} samples")
     return train_loader, val_loader, test_loader
 
-# ---------- Loss Functions (copied from original) ----------
+# ---------- Loss Functions ----------
 class DiceLoss(nn.Module):
     def __init__(self, smooth=1e-6):
         super().__init__()
@@ -102,7 +137,7 @@ def calculate_class_weights(train_loader, device):
     print(f"📊 Class weights: {weights.tolist()}")
     return weights.to(device)
 
-# ---------- Training functions ----------
+# ---------- Training ----------
 def train_one_epoch(model, loader, optimizer, scaler, device, class_weights):
     model.train()
     total_loss = 0.0
@@ -195,7 +230,6 @@ def main(args):
 
     print(f"\n🏆 Best IoU: {best_iou:.4f} at epoch {best_epoch}")
 
-    # Test on best model
     checkpoint_path = checkpoint_dir / 'deeplabv3_best_model.pt'
     if checkpoint_path.exists():
         model.load_state_dict(torch.load(checkpoint_path))
@@ -203,7 +237,6 @@ def main(args):
         print(f"\n✅ Test IoU: {test_iou:.4f}")
         print(f"✅ Test Dice: {test_dice:.4f}")
 
-        # Save metrics
         with open(checkpoint_dir / 'deeplabv3_metrics.txt', 'w') as f:
             f.write(f"Model: deeplabv3\n")
             f.write(f"Encoder: {args.encoder}\n")
