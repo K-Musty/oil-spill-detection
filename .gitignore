@@ -26,7 +26,6 @@ data/raw/
 
 # Model checkpoints (optional - you can keep)
 checkpoints/
-*.pt
 *.pth
 *.onnx
 

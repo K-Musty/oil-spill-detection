@@ -9,24 +9,17 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 # ---------- PATH SETUP ----------
-# Get the directory where this script lives
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(SCRIPT_DIR, "best_model.pt")
 
 # ---------- PAGE CONFIG ----------
-st.set_page_config(
-    page_title="Oil Spill Detection",
-    page_icon="🛢️",
-    layout="wide"
-)
-
+st.set_page_config(page_title="Oil Spill Detection", page_icon="🛢️", layout="wide")
 st.title("🛢️ Oil Spill Detection from SAR Imagery")
 st.markdown("Upload a Sentinel-1 SAR image to detect oil spills using deep learning.")
 
 # ---------- LOAD MODEL ----------
 @st.cache_resource
 def load_model():
-    """Load the PyTorch model from the local path."""
     if not os.path.exists(MODEL_PATH):
         st.error(f"❌ Model file not found at: {MODEL_PATH}")
         return None, None
@@ -54,20 +47,32 @@ if model is None:
 
 # ---------- PREPROCESSING ----------
 def preprocess_image(image):
-    """Convert uploaded image to model input tensor."""
+    """Preprocess uploaded image to match model input (3-channel RGB, 256x256)."""
     image = np.array(image)
-    # Convert to grayscale if RGB
-    if len(image.shape) == 3:
-        image = np.mean(image, axis=2)
-    # Normalize to [0,1]
-    image = image.astype(np.float32)
-    image = (image - image.min()) / (image.max() - image.min() + 1e-8)
+    
+    # Handle grayscale (1 channel) -> convert to RGB
+    if len(image.shape) == 2:
+        image = np.stack([image, image, image], axis=2)
+    # Handle RGBA (4 channels) -> drop alpha
+    elif image.shape[-1] == 4:
+        image = image[:, :, :3]
+    
+    # Ensure we have 3 channels
+    if image.shape[-1] != 3:
+        raise ValueError(f"Expected 3 channels, got {image.shape[-1]}")
+    
     # Resize to 256x256
-    img = Image.fromarray((image * 255).astype(np.uint8))
+    img = Image.fromarray(image.astype(np.uint8))
     img = img.resize((256, 256))
-    image = np.array(img).astype(np.float32) / 255.0
-    # Add batch and channel dimensions (1, 1, H, W)
-    image = torch.tensor(image, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    image = np.array(img).astype(np.float32)
+    
+    # Normalize to [0, 1]
+    image = image / 255.0
+    
+    # Convert to tensor: (H, W, C) -> (C, H, W)
+    image = torch.tensor(image, dtype=torch.float32).permute(2, 0, 1)
+    image = image.unsqueeze(0)  # Add batch dimension
+    
     return image.to(device)
 
 # ---------- INFERENCE ----------
@@ -84,26 +89,20 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    # Display uploaded image
     image = Image.open(uploaded_file)
     col1, col2 = st.columns(2)
     with col1:
         st.image(image, caption="Uploaded Image", width=300)
 
-    # Detection button
     if st.button("🔍 Detect Oil Spill", type="primary"):
         with st.spinner("Analyzing image..."):
             try:
-                # Preprocess
                 processed = preprocess_image(image)
-                # Inference
                 mask = run_inference(processed)
                 oil_percentage = (mask == 1).sum() / mask.size * 100
 
-                # Prepare display image
                 original_display = processed[0, 0].cpu().numpy()
 
-                # Create side‑by‑side plot
                 fig, axes = plt.subplots(1, 2, figsize=(10, 5))
                 axes[0].imshow(original_display, cmap='gray')
                 axes[0].set_title('Original SAR Image')
@@ -118,8 +117,6 @@ if uploaded_file is not None:
 
                 with col2:
                     st.pyplot(fig)
-
-                    # Status
                     if oil_percentage > 10:
                         st.error(f"⚠️ HIGH oil concentration: {oil_percentage:.1f}%")
                     elif oil_percentage > 2:
@@ -130,6 +127,5 @@ if uploaded_file is not None:
             except Exception as e:
                 st.error(f"Error during inference: {e}")
 
-# ---------- FOOTER ----------
 st.markdown("---")
 st.caption("Built with PyTorch, segmentation‑models‑pytorch, and Streamlit.")
