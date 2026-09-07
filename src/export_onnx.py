@@ -14,11 +14,6 @@ from pathlib import Path
 def convert_to_onnx(checkpoint_path, onnx_path, input_size=(1, 3, 256, 256)):
     """
     Convert PyTorch model to ONNX format.
-    
-    Args:
-        checkpoint_path: Path to .pt checkpoint
-        onnx_path: Output path for .onnx file
-        input_size: (batch, channels, height, width)
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"🚀 Using device: {device}")
@@ -49,7 +44,7 @@ def convert_to_onnx(checkpoint_path, onnx_path, input_size=(1, 3, 256, 256)):
         dummy_input,
         onnx_path,
         export_params=True,
-        opset_version=14,
+        opset_version=11,  # Changed from 14 to 11 for compatibility
         input_names=['input'],
         output_names=['output'],
         dynamic_axes={
@@ -73,13 +68,10 @@ def convert_to_onnx(checkpoint_path, onnx_path, input_size=(1, 3, 256, 256)):
 
 def quantize_onnx(model_path, quantized_path):
     """
-    Quantize ONNX model to INT8 for faster inference and smaller size.
-    
-    Args:
-        model_path: Path to .onnx file
-        quantized_path: Output path for quantized .onnx file
+    Quantize ONNX model using onnxruntime quantization.
     """
     try:
+        # Try the official quantization API
         from onnxruntime.quantization import quantize_dynamic, QuantType
         
         print("🔄 Quantizing model...")
@@ -96,34 +88,29 @@ def quantize_onnx(model_path, quantized_path):
         quant_size = os.path.getsize(quantized_path) / (1024 * 1024)
         reduction = (1 - quant_size / orig_size) * 100
         print(f"📊 Size: {orig_size:.2f} MB → {quant_size:.2f} MB ({reduction:.1f}% reduction)")
-
         return quantized_path
+        
+    except ImportError:
+        print("⚠️ Quantization library not available. Using non-quantized model.")
+        return model_path
     except Exception as e:
         print(f"⚠️ Quantization failed: {e}")
         print("   Using non-quantized model instead.")
         return model_path
 
 
-def test_inference(onnx_path, num_runs=100):
+def test_inference(onnx_path, num_runs=50):
     """
     Test inference speed on CPU.
-    
-    Args:
-        onnx_path: Path to .onnx file
-        num_runs: Number of runs for timing
     """
-    print(f"\n⚡ Testing inference speed on CPU...")
+    print(f"\n⚡ Testing inference speed...")
     
-    # Try different providers
-    providers = ['CPUExecutionProvider']
-    if ort.get_device() == 'GPU':
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-    
-    session = ort.InferenceSession(onnx_path, providers=providers)
+    # Use CPU for testing
+    session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
     dummy_input = np.random.randn(1, 3, 256, 256).astype(np.float32)
 
     # Warm-up
-    for _ in range(10):
+    for _ in range(5):
         session.run(None, {'input': dummy_input})
 
     # Measure
@@ -143,32 +130,6 @@ def test_inference(onnx_path, num_runs=100):
     return avg_time, std_time, fps
 
 
-def compare_models(onnx_path, quantized_path):
-    """
-    Compare original vs quantized model performance.
-    """
-    print("\n" + "=" * 50)
-    print("📊 COMPARISON: Original vs Quantized")
-    print("=" * 50)
-
-    print("\n🔹 Original ONNX:")
-    orig_size = os.path.getsize(onnx_path) / (1024 * 1024)
-    print(f"   Size: {orig_size:.2f} MB")
-    orig_time, _, orig_fps = test_inference(onnx_path)
-
-    print("\n🔹 Quantized ONNX:")
-    if os.path.exists(quantized_path):
-        quant_size = os.path.getsize(quantized_path) / (1024 * 1024)
-        print(f"   Size: {quant_size:.2f} MB")
-        quant_time, _, quant_fps = test_inference(quantized_path)
-
-        speedup = orig_time / quant_time
-        print(f"\n📈 Speedup: {speedup:.2f}x faster")
-        print(f"📉 Size reduction: {(1 - quant_size/orig_size)*100:.1f}%")
-    else:
-        print("   Quantized model not found.")
-
-
 def main():
     # Paths
     checkpoint_path = "checkpoints/best_model.pt"
@@ -181,15 +142,21 @@ def main():
 
     # Step 1: Export to ONNX
     print("\n📌 Step 1: Exporting to ONNX")
-    convert_to_onnx(checkpoint_path, onnx_path)
+    try:
+        convert_to_onnx(checkpoint_path, onnx_path)
+    except Exception as e:
+        print(f"❌ Export failed: {e}")
+        return
 
-    # Step 2: Quantize
+    # Step 2: Quantize (if possible)
     print("\n📌 Step 2: Quantizing")
-    quantize_onnx(onnx_path, quantized_path)
+    quantized_path = quantize_onnx(onnx_path, quantized_path)
 
-    # Step 3: Compare
-    print("\n📌 Step 3: Performance Comparison")
-    compare_models(onnx_path, quantized_path)
+    # Step 3: Test inference
+    print("\n📌 Step 3: Testing Inference")
+    test_inference(onnx_path)
+    if os.path.exists(quantized_path):
+        test_inference(quantized_path)
 
     print("\n" + "=" * 50)
     print("✅ ONNX export complete!")
