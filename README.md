@@ -206,7 +206,6 @@ We initially attempted to export the trained models to ONNX format for lightweig
 **Abdulrahman Kalli Mustapha**
 - Email: kmustapha9564@gmail.com
 - GitHub: [@K-Musty](https://github.com/K-Musty)
-- Affiliation: Al-Qalam University, Katsina, Nigeria
 
 ---
 
